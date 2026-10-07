@@ -1,0 +1,135 @@
+const int enA = 9;
+const int in1 = A4;
+const int in2 = A3;
+
+const int enB = 10;
+const int in3 = A0;
+const int in4 = A1;
+
+
+const bool reverseLeft = true;
+const bool reverseRight = true;
+
+int speed = 200;
+char movement = 's';
+
+void setMotor(int enable, int input1, int input2, int value) {
+  value = constrain(value, -255, 255);
+  analogWrite(enable, 0);
+
+  digitalWrite(input1, value < 0 ? HIGH : LOW);
+  digitalWrite(input2, value > 0 ? HIGH : LOW);
+
+  analogWrite(enable, abs(value));
+}
+
+void drive(int left, int right) {
+  if (reverseLeft) left = -left;
+  if (reverseRight) right = -right;
+
+  setMotor(enA, in1, in2, left);
+  setMotor(enB, in3, in4, right);
+}
+
+void forward(int value) {
+  drive(value, value);
+}
+
+void backward(int value) {
+  drive(-value, -value);
+}
+
+void stop() {
+  drive(0, 0);
+}
+
+void turnLeft(int value) {
+  drive(value / 2, value);
+}
+
+void turnRight(int value) {
+  drive(value, value / 2);
+}
+
+void spinLeft(int value) {
+  drive(-value, value);
+}
+
+void spinRight(int value) {
+  drive(value, -value);
+}
+
+void applyMovement() {
+  switch (movement) {
+    case 'f': forward(speed); break;
+    case 'b': backward(speed); break;
+    case 'l': turnLeft(speed); break;
+    case 'r': turnRight(speed); break;
+    case 'q': spinLeft(speed); break;
+    case 'e': spinRight(speed); break;
+    case 'a': drive(speed, 0); break;
+    case 'd': drive(0, speed); break;
+    default: stop(); break;
+  }
+}
+
+void setup() {
+  pinMode(enA, OUTPUT);
+  pinMode(in1, OUTPUT);
+  pinMode(in2, OUTPUT);
+  pinMode(enB, OUTPUT);
+  pinMode(in3, OUTPUT);
+  pinMode(in4, OUTPUT);
+
+  stop();
+  Serial.begin(9600);
+
+  Serial.println("f: forward | b: backward | s: stop");
+  Serial.println("l/r: curve left/right | q/e: spin left/right");
+  Serial.println("a: left motor | d: right motor");
+  Serial.println("+/-: increase/decrease speed");
+}
+
+void loop() {
+  if (Serial.available() > 0) {
+    char command = Serial.read();
+
+    if (command == '\n' || command == '\r' || command == ' ') {
+      return;
+    }
+
+    switch (command) {
+      case 'f':
+      case 'b':
+      case 's':
+      case 'l':
+      case 'r':
+      case 'q':
+      case 'e':
+      case 'a':
+      case 'd':
+        movement = command;
+        break;
+
+      case '+':
+        speed = constrain(speed + 15, 0, 255);
+        break;
+
+      case '-':
+        speed = constrain(speed - 15, 0, 255);
+        break;
+
+      default:
+        movement = 's';
+        Serial.println("Unknown command: stopped.");
+        break;
+    }
+
+    applyMovement();
+
+    Serial.print("Movement: ");
+    Serial.print(movement);
+    Serial.print(" | Speed: ");
+    Serial.println(speed);
+  }
+}
