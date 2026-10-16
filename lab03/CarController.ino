@@ -17,9 +17,17 @@ const int rightMotorInput2 = A1;
 // LED PIN CONFIGURATION
 // ==========================================
 
-const int leftLED = 2;     // Green LED - Left
-const int rightLED = 3;    // Green LED - Right
-const int yellowLED = 4;   // Yellow LED - Forward/Reverse
+const int leftLED = 2;
+const int rightLED = 3;
+const int yellowLED = 4;
+
+
+// ==========================================
+// ENCODER PIN CONFIGURATION
+// ==========================================
+
+const int leftEncoderPin = 12;
+const int rightEncoderPin = 11;
 
 
 // ==========================================
@@ -29,12 +37,26 @@ const int yellowLED = 4;   // Yellow LED - Forward/Reverse
 int speed = 255;
 char movement = ' ';
 
-// LED blink settings
+// LED blinking
 const unsigned long blinkInterval = 400;
 
 unsigned long previousBlinkTime = 0;
 bool blinkState = true;
 char previousMovement = '\0';
+
+// Encoder tracking
+unsigned long leftPulseCount = 0;
+unsigned long rightPulseCount = 0;
+
+unsigned long previousLeftPulseCount = 0;
+unsigned long previousRightPulseCount = 0;
+
+int previousLeftEncoderState = HIGH;
+int previousRightEncoderState = HIGH;
+
+// Telemetry interval
+const unsigned long telemetryInterval = 500;
+unsigned long previousTelemetryTime = 0;
 
 
 // ==========================================
@@ -45,14 +67,11 @@ void setMotor(int enablePin, int input1, int input2, int motorPWM) {
 
   motorPWM = constrain(motorPWM, -255, 255);
 
-  // Disable motor before changing direction
   analogWrite(enablePin, 0);
 
-  // Set motor direction
   digitalWrite(input1, motorPWM < 0 ? HIGH : LOW);
   digitalWrite(input2, motorPWM > 0 ? HIGH : LOW);
 
-  // Set motor speed using PWM
   analogWrite(enablePin, abs(motorPWM));
 }
 
@@ -166,13 +185,13 @@ void updateLEDs() {
     blinkState = true;
   }
 
-  // Toggle LED state every 400 milliseconds
+  // Toggle blinking state
   if (currentTime - previousBlinkTime >= blinkInterval) {
     previousBlinkTime = currentTime;
     blinkState = !blinkState;
   }
 
-  // Turn all LEDs off first
+  // Turn off all LEDs initially
   digitalWrite(leftLED, LOW);
   digitalWrite(rightLED, LOW);
   digitalWrite(yellowLED, LOW);
@@ -180,43 +199,122 @@ void updateLEDs() {
   switch (movement) {
 
     case 'w':
-      // Forward: yellow LED stays ON
       digitalWrite(yellowLED, HIGH);
       break;
 
     case 's':
-      // Reverse: yellow LED blinks
       digitalWrite(yellowLED, blinkState ? HIGH : LOW);
       break;
 
     case 'a':
-      // Turn left: left green LED blinks
       digitalWrite(leftLED, blinkState ? HIGH : LOW);
       break;
 
     case 'd':
-      // Turn right: right green LED blinks
       digitalWrite(rightLED, blinkState ? HIGH : LOW);
       break;
 
     case 'q':
-      // Spin left: left green blinks + yellow stays ON
       digitalWrite(leftLED, blinkState ? HIGH : LOW);
       digitalWrite(yellowLED, HIGH);
       break;
 
     case 'e':
-      // Spin right: right green blinks + yellow stays ON
       digitalWrite(rightLED, blinkState ? HIGH : LOW);
       digitalWrite(yellowLED, HIGH);
       break;
 
     default:
-      // Stop: all LEDs remain OFF
       break;
   }
 }
 
+
+// ==========================================
+// ENCODER TRACKING
+// ==========================================
+
+void updateEncoders() {
+
+  // Read current encoder states
+  int leftEncoderState = digitalRead(leftEncoderPin);
+  int rightEncoderState = digitalRead(rightEncoderPin);
+
+  // Count each HIGH-to-LOW transition
+  if (previousLeftEncoderState == HIGH &&
+      leftEncoderState == LOW) {
+
+    leftPulseCount++;
+  }
+
+  if (previousRightEncoderState == HIGH &&
+      rightEncoderState == LOW) {
+
+    rightPulseCount++;
+  }
+
+  // Save states for the next reading
+  previousLeftEncoderState = leftEncoderState;
+  previousRightEncoderState = rightEncoderState;
+}
+
+
+// ==========================================
+// TELEMETRY OUTPUT
+// ==========================================
+
+void printTelemetry() {
+
+  unsigned long currentTime = millis();
+
+  unsigned long elapsedTime =
+    currentTime - previousTelemetryTime;
+
+  if (elapsedTime < telemetryInterval) {
+    return;
+  }
+
+  // Pulses detected since previous report
+  unsigned long leftPulses =
+    leftPulseCount - previousLeftPulseCount;
+
+  unsigned long rightPulses =
+    rightPulseCount - previousRightPulseCount;
+
+  // Calculate pulses per second
+  float leftPPS =
+    (leftPulses * 1000.0) / elapsedTime;
+
+  float rightPPS =
+    (rightPulses * 1000.0) / elapsedTime;
+
+  // Print CSV telemetry
+  Serial.print(currentTime);
+  Serial.print(",");
+
+  Serial.print(movement == ' ' ? "stop" : String(movement));
+  Serial.print(",");
+
+  Serial.print(speed);
+  Serial.print(",");
+
+  Serial.print(leftPulseCount);
+  Serial.print(",");
+
+  Serial.print(rightPulseCount);
+  Serial.print(",");
+
+  Serial.print(leftPPS, 2);
+  Serial.print(",");
+
+  Serial.println(rightPPS, 2);
+
+  // Update previous measurements
+  previousLeftPulseCount = leftPulseCount;
+  previousRightPulseCount = rightPulseCount;
+
+  previousTelemetryTime = currentTime;
+}
 
 
 // ==========================================
@@ -225,7 +323,7 @@ void updateLEDs() {
 
 void setup() {
 
-  // Configure motor pins
+  // Motor pins
   pinMode(leftMotorEnablePin, OUTPUT);
   pinMode(leftMotorInput1, OUTPUT);
   pinMode(leftMotorInput2, OUTPUT);
@@ -234,28 +332,39 @@ void setup() {
   pinMode(rightMotorInput1, OUTPUT);
   pinMode(rightMotorInput2, OUTPUT);
 
-  // Configure LED pins
+  // LED pins
   pinMode(leftLED, OUTPUT);
   pinMode(rightLED, OUTPUT);
   pinMode(yellowLED, OUTPUT);
 
-  // Start with all LEDs off
+  // Encoder pins
+  pinMode(leftEncoderPin, INPUT_PULLUP);
+  pinMode(rightEncoderPin, INPUT_PULLUP);
+
+  // Read initial encoder states
+  previousLeftEncoderState =
+    digitalRead(leftEncoderPin);
+
+  previousRightEncoderState =
+    digitalRead(rightEncoderPin);
+
+  // Initially turn LEDs off
   digitalWrite(leftLED, LOW);
   digitalWrite(rightLED, LOW);
   digitalWrite(yellowLED, LOW);
 
-  // Stop motors initially
+  // Initially stop motors
   stop();
 
-  // Start Serial Monitor
+  // Start serial communication
   Serial.begin(9600);
 
-  Serial.println("=== ROBOT CONTROLLER ===");
-  Serial.println("w: Forward | s: Backward");
-  Serial.println("a/d: Turn left/right");
-  Serial.println("q/e: Spin left/right");
-  Serial.println("Space: Stop");
-  Serial.println("+/-: Increase/decrease speed");
+  previousTelemetryTime = millis();
+
+  // CSV header
+  Serial.println(
+    "t_ms,movement,pwm,left_count,right_count,left_pps,right_pps"
+  );
 }
 
 
@@ -265,11 +374,14 @@ void setup() {
 
 void loop() {
 
+  // Read encoders continuously
+  updateEncoders();
+
+  // Process serial commands
   if (Serial.available() > 0) {
 
     char command = Serial.read();
 
-    // Ignore line endings
     if (command != '\n' && command != '\r') {
 
       switch (command) {
@@ -294,21 +406,16 @@ void loop() {
 
         default:
           movement = ' ';
-          Serial.println("Unknown command: stopped.");
           break;
       }
 
-      // Apply movement
       applyMovement();
-
-      // Print status
-      Serial.print("Movement: ");
-      Serial.print(movement);
-      Serial.print(" | Speed: ");
-      Serial.println(speed);
     }
   }
 
-  // Update LEDs continuously
+  // Update LED indicators
   updateLEDs();
+
+  // Print encoder telemetry every 500 ms
+  printTelemetry();
 }
