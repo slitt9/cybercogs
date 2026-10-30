@@ -1,88 +1,212 @@
+
 #include <math.h>
 
-// ==========================================
-// MOTOR PIN CONFIGURATION
-// ==========================================
+// =====================================================
+// ARDUINO UNO R4 WIFI - RIGHT WALL FOLLOWING ROBOT
+// No external LEDs
+// New FRONT = motor-wheel end of robot
+// Right-facing ultrasonic sensor
+// =====================================================
 
-// Left motor
-const int leftMotorEnablePin = 9;
+const int buttonPin = 2;
+
+// ---------------- MOTOR DRIVER PINS ------------------
+// Retain the existing L298N pin wiring.
+
+const int leftMotorEnablePin = 10;
 const int leftMotorInput1 = A4;
 const int leftMotorInput2 = A3;
 
-// Right motor
-const int rightMotorEnablePin = 10;
+const int rightMotorEnablePin = 9;
 const int rightMotorInput1 = A0;
 const int rightMotorInput2 = A1;
 
-
-// ==========================================
-// LED PIN CONFIGURATION
-// ==========================================
-
-const int leftLED = 2;
-const int rightLED = 3;
-const int yellowLED = 4;
-
-
-// ==========================================
-// ENCODER PIN CONFIGURATION
-// ==========================================
+// ---------------- ENCODER PINS -----------------------
 
 const int leftEncoderPin = 12;
 const int rightEncoderPin = 11;
 
+// ---------------- ULTRASONIC PINS --------------------
 
-// ==========================================
-// ULTRASONIC SENSOR PIN CONFIGURATION
-// ==========================================
-
-// IMPORTANT:
-// Change -1 to the Arduino pin you connect.
-//
-// Front ultrasonic sensor
 const int frontTrigPin = 5;
 const int frontEchoPin = 6;
 
-// No side ultrasonic sensor connected yet
-const int sideTrigPin = 7;
-const int sideEchoPin = 8;
-//
-// Both sensors:
-// VCC -> Arduino 5V
-// GND -> Arduino GND
-//
-// -1 means the pin is not configured.
+// This sensor now faces RIGHT.
+const int rightTrigPin = 7;
+const int rightEchoPin = 8;
 
+// =====================================================
+// GENERAL SETTINGS
+// =====================================================
 
-// ==========================================
-// GLOBAL VARIABLES
-// ==========================================
-
-int speed = 255;
-
-// Manual commands:
-// w, s, a, d, q, e, space
-//
-// Autonomous modes:
-// h = Follow Me
-// g = Wall Follow
-
+int speed = 85;
 char movement = ' ';
 
-// Actual LED movement indicator
-char indicatorMovement = ' ';
+const unsigned long controlInterval = 100;
+unsigned long previousControlTime = 0;
 
-// LED blinking
-const unsigned long blinkInterval = 400;
+const unsigned long telemetryInterval = 500;
+unsigned long previousTelemetryTime = 0;
 
-unsigned long previousBlinkTime = 0;
-bool blinkState = true;
-char previousMovement = '\0';
+// Autonomous mode starts after five seconds
+// if no serial command is received.
+//
+// Set false to disable automatic starting
+// during setup or testing.
 
+const bool enableAutoStart = false;
 
-// ==========================================
+const unsigned long autoStartDelayMS = 5000;
+
+bool autoStartPending = true;
+
+// =====================================================
+// MOTOR DIRECTION CONFIGURATION
+// =====================================================
+
+// The robot's NEW front is the opposite end
+// from the previous version.
+//
+// The old code used negative motor commands
+// for forward movement.
+//
+// This version uses positive motor commands
+// to move toward the NEW front.
+//
+// If W drives in the wrong direction during
+// the manual test, change this to -1.
+
+const int motorForwardPolarity = 1;
+
+// =====================================================
+// FOLLOW ME SETTINGS
+// =====================================================
+
+const float followSetpointCM = 25.0;
+const float followToleranceCM = 2.0;
+
+const float followKp = 8.0;
+
+const int maxFollowPWM = 200;
+const int minMovingPWM = 125;
+
+// =====================================================
+// RIGHT WALL FOLLOWING - P CONTROLLER
+// =====================================================
+
+const float wallSetpointCM = 25.0;
+
+const float wallKp = 3.0;
+
+const int maxWallBasePWM = 95;
+const int maxWallCorrectionPWM = 10;
+
+const float sideFilterAlpha = 0.35;
+const float maxCorrectionStep = 12.0;
+
+// =====================================================
+// CORNER NAVIGATION SETTINGS
+// =====================================================
+
+// Start a turn when an obstacle is approaching.
+const float insideCornerDistanceCM = 30.0;
+
+// Front must be this clear before continuing.
+const float frontClearDistanceCM = 32.0;
+
+// Right wall considered missing beyond this.
+const float wallLostDistanceCM = 55.0;
+
+// Right wall detected again within this distance.
+const float wallFoundDistanceCM = 38.0;
+
+// Consecutive samples to confirm an opening.
+const int wallLostConfirmations = 3;
+
+// Motor speed during turns.
+const int insideTurnPWM = 105;
+const int outsideTurnPWM = 105;
+
+// Minimum time before accepting a completed turn.
+const unsigned long minTurnTimeMS = 300;
+
+// Maximum permitted turning time.
+const unsigned long maxTurnTimeMS = 5000;
+
+// Allow limited invalid front measurements
+// during a turn.
+const int maxInvalidFrontReadings = 5;
+
+// Require two clear-front measurements
+// before considering the turn complete.
+const int frontClearConfirmations = 2;
+
+// =====================================================
+// BACKUP SETTINGS
+// =====================================================
+
+// If the front sensor reports less than 15 cm
+// at the start of a turn, back up briefly.
+
+const float minSpinClearanceCM = 15.0;
+
+const float backupClearDistanceCM = 22.0;
+
+const int backupPWM = 105;
+
+const unsigned long maxBackupMS = 700;
+
+// No rear sensor is installed. Backup is
+// strictly time-limited and requires testing.
+
+// =====================================================
+// OPTIONAL ENCODER STALL DETECTION
+// =====================================================
+
+// Leave disabled until you have confirmed
+// both encoders count reliably during turns.
+//
+// Turn timeouts still remain active.
+
+const bool enableEncoderStallCheck = false;
+
+const unsigned long spinStallTimeMS = 700;
+
+// =====================================================
+// SENSOR AND NAVIGATION VARIABLES
+// =====================================================
+
+float frontDistanceCM = NAN;
+float rightDistanceCM = NAN;
+
+float filteredRightCM = NAN;
+
+float previousCorrection = 0;
+
+int wallLostCounter = 0;
+int invalidFrontCounter = 0;
+int frontClearCounter = 0;
+
+const char* stopReason = "none";
+
+enum NavigationState {
+  FOLLOW_WALL,
+  BACK_UP,
+  INSIDE_TURN,
+  OUTSIDE_TURN,
+  NAV_STOPPED
+};
+
+NavigationState navState = NAV_STOPPED;
+
+// Which turn to perform after backing up.
+NavigationState pendingTurn = INSIDE_TURN;
+
+unsigned long stateStartTime = 0;
+
+// =====================================================
 // ENCODER VARIABLES
-// ==========================================
+// =====================================================
 
 unsigned long leftPulseCount = 0;
 unsigned long rightPulseCount = 0;
@@ -93,171 +217,15 @@ unsigned long previousRightPulseCount = 0;
 int previousLeftEncoderState = HIGH;
 int previousRightEncoderState = HIGH;
 
+unsigned long lastMotionTime = 0;
+unsigned long lastMotionPulseTotal = 0;
 
-// ==========================================
-// TELEMETRY CONFIGURATION
-// ==========================================
+// Forward declaration, used during sensor delay.
+void updateEncoders();
 
-const unsigned long telemetryInterval = 500;
-
-unsigned long previousTelemetryTime = 0;
-
-
-// ==========================================
-// PID CONFIGURATION
-// ==========================================
-
-// Desired distance from the object
-const float followSetpointCM = 25.0;
-
-// Desired distance from the side wall
-const float wallSetpointCM = 25.0;
-
-// Follow Me PID gains
-float followKp = 8.0;
-float followKi = 0.0;
-float followKd = 0.0;
-
-// Wall Follow PID gains
-float wallKp = 3.0;
-float wallKi = 0.0;
-float wallKd = 0.0;
-
-// General controller settings
-const unsigned long controlInterval = 100;
-
-// Distance tolerance
-const float distanceToleranceCM = 2.0;
-
-// Stop wall following if an obstacle is too close
-const float frontSafetyDistanceCM = 15.0;
-
-// Choose which side of the robot faces the wall
-const bool wallOnLeft = true;
-
-// Maximum Follow Me motor command
-const int maxFollowPWM = 200;
-
-// Minimum PWM to overcome motor friction.
-// Tune experimentally for your robot.
-const int minMovingPWM = 125;
-
-// Wall-following speed settings
-const int maxWallBasePWM = 170;
-const int maxWallCorrectionPWM = 90;
-
-unsigned long previousControlTime = 0;
-
-// Store latest sensor measurements
-float frontDistanceCM = NAN;
-float sideDistanceCM = NAN;
-
-
-// ==========================================
-// PID CONTROLLER STRUCTURE
-// ==========================================
-
-struct PIDController {
-
-  float kp;
-  float ki;
-  float kd;
-
-  float integral;
-  float previousError;
-
-  bool initialized;
-};
-
-// Independent controller for each mode
-PIDController followPID = {
-  8.0, 0.0, 0.0,
-  0.0, 0.0, false
-};
-
-PIDController wallPID = {
-  3.0, 0.0, 0.0,
-  0.0, 0.0, false
-};
-
-
-// ==========================================
-// PID FUNCTIONS
-// ==========================================
-
-void resetPID(PIDController &pid) {
-
-  pid.integral = 0;
-  pid.previousError = 0;
-  pid.initialized = false;
-}
-
-
-float calculatePID(
-  PIDController &pid,
-  float error,
-  float dt,
-  float maxOutput
-) {
-
-  if (dt <= 0) {
-    return 0;
-  }
-
-  // Proportional component
-  float P = pid.kp * error;
-
-  // Integral component
-  pid.integral += error * dt;
-
-  // Prevent excessive integral accumulation
-  if (pid.ki > 0) {
-
-    float maxIntegral = maxOutput / pid.ki;
-
-    pid.integral = constrain(
-      pid.integral,
-      -maxIntegral,
-      maxIntegral
-    );
-
-  } else {
-
-    pid.integral = 0;
-  }
-
-  float I = pid.ki * pid.integral;
-
-  // Derivative component
-  float derivative = 0;
-
-  if (pid.initialized) {
-
-    derivative =
-      (error - pid.previousError) / dt;
-  }
-
-  float D = pid.kd * derivative;
-
-  // Save current error
-  pid.previousError = error;
-  pid.initialized = true;
-
-  // PID output
-  float output = P + I + D;
-
-  // Limit output
-  return constrain(
-    output,
-    -maxOutput,
-    maxOutput
-  );
-}
-
-
-// ==========================================
+// =====================================================
 // MOTOR CONTROL
-// ==========================================
+// =====================================================
 
 void setMotor(
   int enablePin,
@@ -268,91 +236,84 @@ void setMotor(
 
   motorPWM = constrain(motorPWM, -255, 255);
 
-  // Disable motor before direction changes
+  // Disable before changing motor direction.
   analogWrite(enablePin, 0);
 
-  // Set motor direction
-  digitalWrite(input1, motorPWM < 0 ? HIGH : LOW);
-  digitalWrite(input2, motorPWM > 0 ? HIGH : LOW);
+  digitalWrite(
+    input1,
+    motorPWM < 0 ? HIGH : LOW
+  );
 
-  // Apply PWM
+  digitalWrite(
+    input2,
+    motorPWM > 0 ? HIGH : LOW
+  );
+
   analogWrite(enablePin, abs(motorPWM));
 }
 
+// Drive using the NEW front of the robot.
+// Positive PWM means forward toward sensors.
 
-void drive(int leftMotorSpeed, int rightMotorSpeed) {
-
-  // Negative signs preserve existing motor calibration
+void drive(int leftPWM, int rightPWM) {
 
   setMotor(
     leftMotorEnablePin,
     leftMotorInput1,
     leftMotorInput2,
-    -leftMotorSpeed
+    motorForwardPolarity * leftPWM
   );
 
   setMotor(
     rightMotorEnablePin,
     rightMotorInput1,
     rightMotorInput2,
-    -rightMotorSpeed
+    motorForwardPolarity * rightPWM
   );
 }
 
+// =====================================================
+// BASIC MOVEMENT
+// =====================================================
 
-// ==========================================
-// ROBOT MOVEMENT FUNCTIONS
-// ==========================================
-
-void forward(int motorSpeed) {
-  drive(motorSpeed, motorSpeed);
+void forward(int pwm) {
+  drive(pwm, pwm);
 }
 
-void backward(int motorSpeed) {
-  drive(-motorSpeed, -motorSpeed);
+void backward(int pwm) {
+  drive(-pwm, -pwm);
 }
 
-void stop() {
+void stopMotors() {
   drive(0, 0);
 }
 
-void turnLeft(int motorSpeed) {
-  drive(motorSpeed / 2, motorSpeed);
+// Gentle steering toward the new left.
+void turnLeft(int pwm) {
+  drive(pwm / 2, pwm);
 }
 
-void turnRight(int motorSpeed) {
-  drive(motorSpeed, motorSpeed / 2);
+// Gentle steering toward the new right.
+void turnRight(int pwm) {
+  drive(pwm, pwm / 2);
 }
 
-void spinLeft(int motorSpeed) {
-  drive(-motorSpeed, motorSpeed);
+// Counterclockwise rotation.
+void spinLeft(int pwm) {
+  drive(-pwm, pwm);
 }
 
-void spinRight(int motorSpeed) {
-  drive(motorSpeed, -motorSpeed);
+// Clockwise rotation.
+void spinRight(int pwm) {
+  drive(pwm, -pwm);
 }
 
-
-// ==========================================
+// =====================================================
 // ULTRASONIC SENSOR FUNCTIONS
-// ==========================================
-
-bool validUltrasonicPins(int trigPin, int echoPin) {
-
-  return trigPin >= 0 &&
-         echoPin >= 0 &&
-         trigPin != echoPin;
-}
-
+// =====================================================
 
 float readDistanceCM(int trigPin, int echoPin) {
 
-  // Invalid configuration
-  if (!validUltrasonicPins(trigPin, echoPin)) {
-    return NAN;
-  }
-
-  // Generate ultrasonic trigger pulse
   digitalWrite(trigPin, LOW);
   delayMicroseconds(2);
 
@@ -361,252 +322,599 @@ float readDistanceCM(int trigPin, int echoPin) {
 
   digitalWrite(trigPin, LOW);
 
-  // Measure echo duration
-  // Timeout after 25 milliseconds
   unsigned long duration =
     pulseIn(echoPin, HIGH, 25000UL);
 
-  // No valid echo
   if (duration == 0) {
     return NAN;
   }
 
-  // Speed of sound ~0.0343 cm/us
   float distanceCM =
     duration * 0.0343 / 2.0;
 
-  // Reject invalid measurements
-  if (distanceCM < 2.0 || distanceCM > 350.0) {
+  if (distanceCM < 2.0 ||
+      distanceCM > 350.0) {
+
     return NAN;
   }
 
   return distanceCM;
 }
 
+void readBothSensors() {
 
-// ==========================================
-// MOTOR STARTUP PWM
-// ==========================================
-
-// Compensates for the minimum PWM needed
-// to overcome friction.
-
-int applyMinimumPWM(int requestedPWM) {
-
-  if (requestedPWM == 0) {
-    return 0;
-  }
-
-  int direction = requestedPWM > 0 ? 1 : -1;
-
-  int magnitude = abs(requestedPWM);
-
-  magnitude = max(magnitude, minMovingPWM);
-
-  return direction * constrain(magnitude, 0, 255);
-}
-
-
-// ==========================================
-// FOLLOW ME CONTROLLER
-// ==========================================
-
-void updateFollowMe(float dt) {
-
-  // Measure distance to object
   frontDistanceCM =
     readDistanceCM(frontTrigPin, frontEchoPin);
 
-  // Stop if no valid measurement
-  if (isnan(frontDistanceCM)) {
+  // Give ultrasonic echoes time to settle.
+  // Continue checking encoder inputs.
 
-    stop();
-    indicatorMovement = ' ';
+  unsigned long waitStart = millis();
 
-    resetPID(followPID);
+  while (millis() - waitStart < 35) {
+    updateEncoders();
+  }
+
+  rightDistanceCM =
+    readDistanceCM(rightTrigPin, rightEchoPin);
+}
+
+// =====================================================
+// NAVIGATION HELPERS
+// =====================================================
+
+void resetWallController() {
+
+  filteredRightCM = NAN;
+  previousCorrection = 0;
+
+  wallLostCounter = 0;
+  invalidFrontCounter = 0;
+  frontClearCounter = 0;
+}
+
+void changeNavState(NavigationState nextState) {
+
+  navState = nextState;
+
+  stateStartTime = millis();
+
+  previousCorrection = 0;
+  invalidFrontCounter = 0;
+  frontClearCounter = 0;
+
+  // Reset encoder-based stall monitoring.
+  lastMotionTime = stateStartTime;
+
+  lastMotionPulseTotal =
+    leftPulseCount + rightPulseCount;
+}
+
+void failSafeStop(const char* reason) {
+
+  stopMotors();
+
+  navState = NAV_STOPPED;
+
+  stopReason = reason;
+}
+
+bool wheelsStalled() {
+
+  unsigned long pulseTotal =
+    leftPulseCount + rightPulseCount;
+
+  if (pulseTotal != lastMotionPulseTotal) {
+
+    lastMotionPulseTotal = pulseTotal;
+    lastMotionTime = millis();
+
+    return false;
+  }
+
+  return millis() - lastMotionTime >
+         spinStallTimeMS;
+}
+
+// =====================================================
+// CORNER TURNING HELPERS
+// =====================================================
+
+// Following a RIGHT wall:
+//
+// INSIDE corner (wall ahead, right wall present)
+//   -> Turn LEFT, away from the right wall.
+//
+// OUTSIDE corner (right wall disappears)
+//   -> Turn RIGHT, toward the opening.
+
+void performTurn(NavigationState turnState) {
+
+  if (turnState == INSIDE_TURN) {
+
+    spinLeft(insideTurnPWM);
+
+  } else if (turnState == OUTSIDE_TURN) {
+
+    spinRight(outsideTurnPWM);
+  }
+}
+
+// Reverse briefly to create turning clearance.
+void backAwayFromFrontWall() {
+
+  backward(backupPWM);
+}
+
+// Begin a left or right maneuver.
+void beginTurn(NavigationState requestedTurn) {
+
+  pendingTurn = requestedTurn;
+
+  if (!isnan(frontDistanceCM) &&
+      frontDistanceCM < minSpinClearanceCM) {
+
+    changeNavState(BACK_UP);
+
+    backAwayFromFrontWall();
+
     return;
   }
 
-  // Calculate distance error
+  changeNavState(requestedTurn);
+
+  performTurn(requestedTurn);
+}
+
+// =====================================================
+// NAVIGATION STATUS FOR PROCESSING
+// =====================================================
+
+const char* navStateName() {
+
+  if (movement != 'g') {
+    return "inactive";
+  }
+
+  switch (navState) {
+
+    case FOLLOW_WALL:
+      return "following";
+
+    case BACK_UP:
+      return "backing_up";
+
+    case INSIDE_TURN:
+      return "inside_turn";
+
+    case OUTSIDE_TURN:
+      return "outside_turn";
+
+    case NAV_STOPPED:
+      return stopReason;
+
+    default:
+      return "invalid_state";
+  }
+}
+
+// =====================================================
+// FOLLOW ME MODE - H
+// =====================================================
+
+void updateFollowMe() {
+
+  frontDistanceCM =
+    readDistanceCM(frontTrigPin, frontEchoPin);
+
+  rightDistanceCM = NAN;
+
+  if (isnan(frontDistanceCM)) {
+    stopMotors();
+    return;
+  }
+
   float error =
     frontDistanceCM - followSetpointCM;
 
-  // Stop close to desired distance
-  if (abs(error) <= distanceToleranceCM) {
+  if (fabs(error) <= followToleranceCM) {
 
-    stop();
-    indicatorMovement = ' ';
-
-    resetPID(followPID);
+    stopMotors();
     return;
   }
 
-  // Calculate PID motor command
-  float output = calculatePID(
-    followPID,
-    error,
-    dt,
+  int pwm = (int)round(followKp * error);
+
+  int direction = pwm > 0 ? 1 : -1;
+
+  int magnitude = constrain(
+    abs(pwm),
+    minMovingPWM,
     maxFollowPWM
   );
 
-  int motorPWM = (int)round(output);
+  pwm = direction * magnitude;
 
-  // Apply minimum usable PWM
-  motorPWM = applyMinimumPWM(motorPWM);
-
-  // Limit maximum forward/backward speed
-  motorPWM = constrain(
-    motorPWM,
-    -maxFollowPWM,
-    maxFollowPWM
-  );
-
-  // Drive both wheels equally
-  drive(motorPWM, motorPWM);
-
-  // Update LED indicators
-  indicatorMovement =
-    motorPWM > 0 ? 'w' : 's';
+  drive(pwm, pwm);
 }
 
+// =====================================================
+// RIGHT WALL FOLLOWING - P CONTROLLER
+// =====================================================
 
-// ==========================================
-// WALL FOLLOW CONTROLLER
-// ==========================================
+void updateFollowWall() {
 
-void updateWallFollow(float dt) {
+  // No reliable front measurement.
+  if (isnan(frontDistanceCM)) {
 
-  // Check for obstacles in front
-  frontDistanceCM =
-    readDistanceCM(frontTrigPin, frontEchoPin);
-
-  // Measure distance to side wall
-  sideDistanceCM =
-    readDistanceCM(sideTrigPin, sideEchoPin);
-
-  // Stop if either sensor reading is invalid
-  if (isnan(frontDistanceCM) ||
-      isnan(sideDistanceCM)) {
-
-    stop();
-    indicatorMovement = ' ';
-
-    resetPID(wallPID);
+    failSafeStop("front_no_echo");
     return;
   }
 
-  // Stop at an obstacle or inside corner
-  if (frontDistanceCM <= frontSafetyDistanceCM) {
+  // Determine whether the RIGHT wall is missing.
+  bool wallMissing =
+    isnan(rightDistanceCM) ||
+    rightDistanceCM > wallLostDistanceCM;
 
-    stop();
-    indicatorMovement = ' ';
+  if (wallMissing) {
 
-    resetPID(wallPID);
+    wallLostCounter++;
+
+  } else {
+
+    wallLostCounter = 0;
+  }
+
+  // -------------------------------------------------
+  // FRONT OBSTACLE
+  // -------------------------------------------------
+
+  if (frontDistanceCM <= insideCornerDistanceCM) {
+
+    // If the right side might be open, stop briefly
+    // while confirming the opening. Don't turn left
+    // immediately into the wrong branch.
+
+    if (wallMissing &&
+        wallLostCounter < wallLostConfirmations) {
+
+      stopMotors();
+      return;
+    }
+
+    // Confirmed right-hand opening: turn RIGHT.
+    if (wallMissing &&
+        wallLostCounter >= wallLostConfirmations) {
+
+      beginTurn(OUTSIDE_TURN);
+      return;
+    }
+
+    // Right wall present: turn LEFT.
+    beginTurn(INSIDE_TURN);
     return;
   }
 
-  // Calculate wall distance error
+  // -------------------------------------------------
+  // OUTSIDE CORNER / RIGHT WALL DISAPPEARS
+  // -------------------------------------------------
+
+  if (wallMissing) {
+
+    if (wallLostCounter >= wallLostConfirmations) {
+
+      beginTurn(OUTSIDE_TURN);
+      return;
+    }
+
+    // Wait for confirmation before turning.
+    forward(maxWallBasePWM);
+    return;
+  }
+
+  // -------------------------------------------------
+  // NORMAL WALL FOLLOWING
+  // -------------------------------------------------
+
+  // Exponential smoothing of right distance.
+  if (isnan(filteredRightCM)) {
+
+    filteredRightCM = rightDistanceCM;
+
+  } else {
+
+    filteredRightCM =
+      sideFilterAlpha * rightDistanceCM +
+      (1.0 - sideFilterAlpha) * filteredRightCM;
+  }
+
+  // Positive error: too far from RIGHT wall.
   float error =
-    sideDistanceCM - wallSetpointCM;
+    filteredRightCM - wallSetpointCM;
 
-  // Calculate steering correction
-  float correction = calculatePID(
-    wallPID,
-    error,
-    dt,
+  // Proportional correction.
+  float desiredCorrection = constrain(
+    wallKp * error,
+    -maxWallCorrectionPWM,
     maxWallCorrectionPWM
   );
 
-  // Avoid unnecessary tiny corrections
-  if (abs(error) <= distanceToleranceCM) {
-    correction = 0;
-  }
+  // Rate limit the correction.
+  float correction = constrain(
+    desiredCorrection,
+    previousCorrection - maxCorrectionStep,
+    previousCorrection + maxCorrectionStep
+  );
 
-  // Wall-following forward speed
+  previousCorrection = correction;
+
   int basePWM = constrain(
     speed,
     0,
     maxWallBasePWM
   );
 
-  // Reverse correction for a right-side wall
-  if (!wallOnLeft) {
-    correction = -correction;
-  }
+  // IMPORTANT: Right-wall correction.
+  //
+  // Too far from right wall:
+  // left wheel faster -> steer RIGHT.
+  //
+  // Too close to right wall:
+  // right wheel faster -> steer LEFT.
 
-  // Differential steering
   int leftPWM = constrain(
-    (int)round(basePWM - correction),
-    0,
-    255
-  );
-
-  int rightPWM = constrain(
     (int)round(basePWM + correction),
     0,
     255
   );
 
-  // Move along the wall
+  int rightPWM = constrain(
+    (int)round(basePWM - correction),
+    0,
+    255
+  );
+
   drive(leftPWM, rightPWM);
+}
 
-  // LED indicators
-  if (basePWM == 0) {
+// =====================================================
+// BACK UP BEFORE TURNING
+// =====================================================
 
-    indicatorMovement = ' ';
+void updateBackUp() {
 
-  } else if (correction > 10) {
+  unsigned long elapsed =
+    millis() - stateStartTime;
 
-    indicatorMovement = 'a';
+  if (isnan(frontDistanceCM)) {
 
-  } else if (correction < -10) {
+    failSafeStop("front_no_echo");
+    return;
+  }
 
-    indicatorMovement = 'd';
+  // Sufficient clearance achieved.
+  if (frontDistanceCM >= backupClearDistanceCM) {
+
+    changeNavState(pendingTurn);
+
+    stopMotors();
+
+    // Next control cycle starts the planned turn.
+    return;
+  }
+
+  // Backing up too long is unsafe because
+  // there is no rear-facing sensor.
+  if (elapsed >= maxBackupMS) {
+
+    failSafeStop("backup_timeout");
+    return;
+  }
+
+  backAwayFromFrontWall();
+}
+
+// =====================================================
+// INSIDE CORNER - TURN LEFT
+// =====================================================
+
+void updateInsideTurn() {
+
+  unsigned long elapsed =
+    millis() - stateStartTime;
+
+  if (elapsed > maxTurnTimeMS) {
+
+    failSafeStop("turn_timeout");
+    return;
+  }
+
+  if (enableEncoderStallCheck && wheelsStalled()) {
+
+    failSafeStop("turn_stall");
+    return;
+  }
+
+  if (isnan(frontDistanceCM)) {
+
+    invalidFrontCounter++;
+
+    if (invalidFrontCounter >= maxInvalidFrontReadings) {
+
+      failSafeStop("front_no_echo");
+      return;
+    }
+
+    spinLeft(insideTurnPWM);
+    return;
+  }
+
+  invalidFrontCounter = 0;
+
+  // Require consecutive clear measurements.
+  if (frontDistanceCM >= frontClearDistanceCM) {
+
+    frontClearCounter++;
 
   } else {
 
-    indicatorMovement = 'w';
+    frontClearCounter = 0;
   }
+
+  if (elapsed >= minTurnTimeMS &&
+      frontClearCounter >= frontClearConfirmations) {
+
+    changeNavState(FOLLOW_WALL);
+
+    resetWallController();
+
+    stopMotors();
+    return;
+  }
+
+  // Continue counterclockwise rotation.
+  spinLeft(insideTurnPWM);
 }
 
+// =====================================================
+// OUTSIDE CORNER - TURN RIGHT
+// =====================================================
 
-// ==========================================
+void updateOutsideTurn() {
+
+  unsigned long elapsed =
+    millis() - stateStartTime;
+
+  if (elapsed > maxTurnTimeMS) {
+
+    failSafeStop("turn_timeout");
+    return;
+  }
+
+  if (enableEncoderStallCheck && wheelsStalled()) {
+
+    failSafeStop("turn_stall");
+    return;
+  }
+
+  if (isnan(frontDistanceCM)) {
+
+    invalidFrontCounter++;
+
+    if (invalidFrontCounter >= maxInvalidFrontReadings) {
+
+      failSafeStop("front_no_echo");
+      return;
+    }
+
+    spinRight(outsideTurnPWM);
+    return;
+  }
+
+  invalidFrontCounter = 0;
+
+  // The forward path must be clear.
+  bool frontClear =
+    frontDistanceCM >= frontClearDistanceCM;
+
+  // Look for the RIGHT wall again.
+  bool foundRightWall =
+    !isnan(rightDistanceCM) &&
+    rightDistanceCM <= wallFoundDistanceCM;
+
+  // Require both conditions for two
+  // consecutive samples.
+
+  if (frontClear && foundRightWall) {
+
+    frontClearCounter++;
+
+  } else {
+
+    frontClearCounter = 0;
+  }
+
+  if (elapsed >= minTurnTimeMS &&
+      frontClearCounter >= frontClearConfirmations) {
+
+    changeNavState(FOLLOW_WALL);
+
+    resetWallController();
+
+    stopMotors();
+    return;
+  }
+
+  // Continue clockwise rotation.
+  spinRight(outsideTurnPWM);
+}
+
+// =====================================================
 // AUTONOMOUS MODE CONTROLLER
-// ==========================================
+// =====================================================
 
 void updateAutonomousMode() {
 
-  if (movement != 'h' && movement != 'g') {
+  if (movement != 'h' &&
+      movement != 'g') {
+
     return;
   }
 
   unsigned long currentTime = millis();
 
-  unsigned long elapsed =
-    currentTime - previousControlTime;
+  if (currentTime - previousControlTime <
+      controlInterval) {
 
-  if (elapsed < controlInterval) {
     return;
   }
 
-  float dt = elapsed / 1000.0;
-
   previousControlTime = currentTime;
 
+  // FOLLOW ME mode.
   if (movement == 'h') {
 
-    updateFollowMe(dt);
+    updateFollowMe();
+    return;
+  }
 
-  } else if (movement == 'g') {
+  // Hold the fail-safe stop until restarted.
+  if (navState == NAV_STOPPED) {
 
-    updateWallFollow(dt);
+    stopMotors();
+    return;
+  }
+
+  // Update ultrasonic distances.
+  readBothSensors();
+
+  switch (navState) {
+
+    case FOLLOW_WALL:
+      updateFollowWall();
+      break;
+
+    case BACK_UP:
+      updateBackUp();
+      break;
+
+    case INSIDE_TURN:
+      updateInsideTurn();
+      break;
+
+    case OUTSIDE_TURN:
+      updateOutsideTurn();
+      break;
+
+    default:
+      failSafeStop("invalid_state");
+      break;
   }
 }
 
-
-// ==========================================
-// MOVEMENT CONTROL
-// ==========================================
+// =====================================================
+// MANUAL MOVEMENT COMMANDS
+// =====================================================
 
 void applyMovement() {
 
@@ -614,167 +922,93 @@ void applyMovement() {
 
     case 'w':
       forward(speed);
-      indicatorMovement = 'w';
       break;
 
     case 's':
       backward(speed);
-      indicatorMovement = 's';
       break;
 
     case 'a':
       turnLeft(speed);
-      indicatorMovement = 'a';
       break;
 
     case 'd':
       turnRight(speed);
-      indicatorMovement = 'd';
       break;
 
     case 'q':
       spinLeft(speed);
-      indicatorMovement = 'q';
       break;
 
     case 'e':
       spinRight(speed);
-      indicatorMovement = 'e';
-      break;
-
-    case 'h':
-    case 'g':
-      // Autonomous control runs separately
       break;
 
     default:
-      stop();
-      indicatorMovement = ' ';
+      stopMotors();
       break;
   }
 }
 
-
-// ==========================================
-// LED CONTROL
-// ==========================================
-
-void updateLEDs() {
-
-  unsigned long currentTime = millis();
-
-  // Reset blinking when indicator changes
-  if (indicatorMovement != previousMovement) {
-
-    previousMovement = indicatorMovement;
-    previousBlinkTime = currentTime;
-    blinkState = true;
-  }
-
-  if (currentTime - previousBlinkTime >= blinkInterval) {
-
-    previousBlinkTime = currentTime;
-    blinkState = !blinkState;
-  }
-
-  digitalWrite(leftLED, LOW);
-  digitalWrite(rightLED, LOW);
-  digitalWrite(yellowLED, LOW);
-
-  switch (indicatorMovement) {
-
-    case 'w':
-      digitalWrite(yellowLED, HIGH);
-      break;
-
-    case 's':
-      digitalWrite(
-        yellowLED,
-        blinkState ? HIGH : LOW
-      );
-      break;
-
-    case 'a':
-      digitalWrite(
-        leftLED,
-        blinkState ? HIGH : LOW
-      );
-      break;
-
-    case 'd':
-      digitalWrite(
-        rightLED,
-        blinkState ? HIGH : LOW
-      );
-      break;
-
-    case 'q':
-      digitalWrite(
-        leftLED,
-        blinkState ? HIGH : LOW
-      );
-      digitalWrite(yellowLED, HIGH);
-      break;
-
-    case 'e':
-      digitalWrite(
-        rightLED,
-        blinkState ? HIGH : LOW
-      );
-      digitalWrite(yellowLED, HIGH);
-      break;
-
-    default:
-      break;
-  }
-}
-
-
-// ==========================================
+// =====================================================
 // ENCODER TRACKING
-// ==========================================
+// =====================================================
 
 void updateEncoders() {
 
-  int leftEncoderState =
+  int leftState =
     digitalRead(leftEncoderPin);
 
-  int rightEncoderState =
+  int rightState =
     digitalRead(rightEncoderPin);
 
-  // Count falling edges
   if (previousLeftEncoderState == HIGH &&
-      leftEncoderState == LOW) {
+      leftState == LOW) {
 
     leftPulseCount++;
   }
 
   if (previousRightEncoderState == HIGH &&
-      rightEncoderState == LOW) {
+      rightState == LOW) {
 
     rightPulseCount++;
   }
 
-  previousLeftEncoderState =
-    leftEncoderState;
-
-  previousRightEncoderState =
-    rightEncoderState;
+  previousLeftEncoderState = leftState;
+  previousRightEncoderState = rightState;
 }
 
+// =====================================================
+// TELEMETRY - PROCESSING COMPATIBLE
+// =====================================================
 
-// ==========================================
-// TELEMETRY OUTPUT
-// ==========================================
+// Keep the existing 10-column CSV format:
+//
+// t_ms,movement,pwm,left_count,right_count,
+// left_pps,right_pps,front_cm,side_cm,nav_state
+//
+// "side_cm" now represents RIGHT distance.
+
+void printDistance(float distance) {
+
+  if (isnan(distance)) {
+
+    Serial.print("NA");
+
+  } else {
+
+    Serial.print(distance, 2);
+  }
+}
 
 void printTelemetry() {
 
-  unsigned long currentTime = millis();
+  unsigned long now = millis();
 
-  unsigned long elapsedTime =
-    currentTime - previousTelemetryTime;
+  unsigned long elapsed =
+    now - previousTelemetryTime;
 
-  if (elapsedTime < telemetryInterval) {
+  if (elapsed < telemetryInterval) {
     return;
   }
 
@@ -785,46 +1019,71 @@ void printTelemetry() {
     rightPulseCount - previousRightPulseCount;
 
   float leftPPS =
-    (leftPulses * 1000.0) / elapsedTime;
+    (leftPulses * 1000.0) / elapsed;
 
   float rightPPS =
-    (rightPulses * 1000.0) / elapsedTime;
+    (rightPulses * 1000.0) / elapsed;
 
-  // Preserve existing 7-column CSV format
-  Serial.print(currentTime);
+  // Timestamp.
+  Serial.print(now);
   Serial.print(",");
 
+  // Current command.
   if (movement == ' ') {
+
     Serial.print("stop");
+
   } else {
+
     Serial.print(movement);
   }
 
   Serial.print(",");
+
+  // Configured speed.
   Serial.print(speed);
   Serial.print(",");
+
+  // Encoder totals.
   Serial.print(leftPulseCount);
   Serial.print(",");
+
   Serial.print(rightPulseCount);
   Serial.print(",");
+
+  // Encoder pulses per second.
   Serial.print(leftPPS, 2);
   Serial.print(",");
-  Serial.println(rightPPS, 2);
+
+  Serial.print(rightPPS, 2);
+  Serial.print(",");
+
+  // Front distance.
+  printDistance(frontDistanceCM);
+  Serial.print(",");
+
+  // Right-side distance, in side_cm column.
+  printDistance(rightDistanceCM);
+  Serial.print(",");
+
+  // Navigation state or stop reason.
+  Serial.println(navStateName());
 
   previousLeftPulseCount = leftPulseCount;
   previousRightPulseCount = rightPulseCount;
 
-  previousTelemetryTime = currentTime;
+  previousTelemetryTime = now;
 }
 
-
-// ==========================================
+// =====================================================
 // SETUP
-// ==========================================
+// =====================================================
 
 void setup() {
 
-  // Motors
+  pinMode(buttonPin, INPUT_PULLUP);
+
+  // Motor pins.
   pinMode(leftMotorEnablePin, OUTPUT);
   pinMode(leftMotorInput1, OUTPUT);
   pinMode(leftMotorInput2, OUTPUT);
@@ -833,16 +1092,7 @@ void setup() {
   pinMode(rightMotorInput1, OUTPUT);
   pinMode(rightMotorInput2, OUTPUT);
 
-  // LEDs
-  pinMode(leftLED, OUTPUT);
-  pinMode(rightLED, OUTPUT);
-  pinMode(yellowLED, OUTPUT);
-
-  digitalWrite(leftLED, LOW);
-  digitalWrite(rightLED, LOW);
-  digitalWrite(yellowLED, LOW);
-
-  // Encoders
+  // Encoder pins.
   pinMode(leftEncoderPin, INPUT_PULLUP);
   pinMode(rightEncoderPin, INPUT_PULLUP);
 
@@ -852,180 +1102,186 @@ void setup() {
   previousRightEncoderState =
     digitalRead(rightEncoderPin);
 
-  // Ultrasonic sensors
-  if (validUltrasonicPins(frontTrigPin, frontEchoPin)) {
+  // Ultrasonic sensors.
+  pinMode(frontTrigPin, OUTPUT);
+  pinMode(frontEchoPin, INPUT);
 
-    pinMode(frontTrigPin, OUTPUT);
-    pinMode(frontEchoPin, INPUT);
+  pinMode(rightTrigPin, OUTPUT);
+  pinMode(rightEchoPin, INPUT);
 
-    digitalWrite(frontTrigPin, LOW);
-  }
+  digitalWrite(frontTrigPin, LOW);
+  digitalWrite(rightTrigPin, LOW);
 
-  if (validUltrasonicPins(sideTrigPin, sideEchoPin)) {
+  stopMotors();
 
-    pinMode(sideTrigPin, OUTPUT);
-    pinMode(sideEchoPin, INPUT);
-
-    digitalWrite(sideTrigPin, LOW);
-  }
-
-  // Initially stop
-  stop();
-
-  // Serial telemetry
+  // Serial for Processing / USB diagnostics.
   Serial.begin(9600);
 
   previousTelemetryTime = millis();
   previousControlTime = millis();
 
   Serial.println(
-    "t_ms,movement,pwm,left_count,right_count,left_pps,right_pps"
+    "t_ms,movement,pwm,left_count,right_count,"
+    "left_pps,right_pps,front_cm,side_cm,nav_state"
   );
 }
 
+// =====================================================
+// AUTONOMOUS STARTUP
+// =====================================================
 
-// ==========================================
+void startWallFollow() {
+
+  movement = 'g';
+
+  stopMotors();
+
+  stopReason = "none";
+
+  resetWallController();
+
+  changeNavState(FOLLOW_WALL);
+
+  previousControlTime =
+    millis() - controlInterval;
+}
+
+void updateAutoStart() {
+
+  if (!autoStartPending) {
+    return;
+  }
+
+  if (!enableAutoStart) {
+
+    autoStartPending = false;
+    return;
+  }
+
+  if (millis() < autoStartDelayMS) {
+    return;
+  }
+
+  autoStartPending = false;
+
+  startWallFollow();
+}
+
+// =====================================================
 // MAIN LOOP
-// ==========================================
+// =====================================================
 
 void loop() {
 
   updateEncoders();
 
-  // Process Serial commands
-  if (Serial.available() > 0) {
+  // Process all received serial commands.
+  while (Serial.available() > 0) {
 
     char command = Serial.read();
 
-    if (command != '\n' && command != '\r') {
+    if (command == '\r' ||
+        command == '\n') {
 
-      switch (command) {
+      continue;
+    }
 
-        case 'w':
-        case 's':
-        case 'a':
-        case 'd':
-        case 'q':
-        case 'e':
-        case ' ':
+    // Receiving a command cancels auto-start.
+    if (autoStartPending) {
 
-          movement = command;
+      autoStartPending = false;
+    }
 
-          resetPID(followPID);
-          resetPID(wallPID);
+    switch (command) {
+
+      // Manual driving.
+      case 'w':
+      case 's':
+      case 'a':
+      case 'd':
+      case 'q':
+      case 'e':
+
+        movement = command;
+
+        navState = NAV_STOPPED;
+
+        applyMovement();
+        break;
+
+      // Stop.
+      case ' ':
+
+        movement = ' ';
+
+        navState = NAV_STOPPED;
+
+        stopReason = "manual_stop";
+
+        stopMotors();
+        break;
+
+      // Follow Me.
+      case 'h':
+
+        movement = 'h';
+
+        navState = NAV_STOPPED;
+
+        stopReason = "none";
+
+        stopMotors();
+
+        previousControlTime =
+          millis() - controlInterval;
+        break;
+
+      // Autonomous right-wall following.
+      case 'g':
+
+        startWallFollow();
+        break;
+
+      // Increase speed.
+      case '+':
+
+        speed = constrain(
+          speed + 15, 0, 255
+        );
+
+        if (movement != 'h' &&
+            movement != 'g') {
 
           applyMovement();
-          break;
+        }
+        break;
 
-        case 'h':
+      // Decrease speed.
+      case '-':
 
-          // Follow Me requires front sensor
-          if (validUltrasonicPins(
-                frontTrigPin,
-                frontEchoPin)) {
+        speed = constrain(
+          speed - 15, 0, 255
+        );
 
-            stop();
-            indicatorMovement = ' ';
+        if (movement != 'h' &&
+            movement != 'g') {
 
-            movement = 'h';
+          applyMovement();
+        }
+        break;
 
-            resetPID(followPID);
-            resetPID(wallPID);
-
-            previousControlTime =
-              millis() - controlInterval;
-
-          } else {
-
-            movement = ' ';
-            stop();
-            indicatorMovement = ' ';
-          }
-
-          break;
-
-        case 'g':
-
-          // Wall Follow requires both sensors
-          if (validUltrasonicPins(
-                frontTrigPin,
-                frontEchoPin) &&
-              validUltrasonicPins(
-                sideTrigPin,
-                sideEchoPin)) {
-
-            stop();
-            indicatorMovement = ' ';
-
-            movement = 'g';
-
-            resetPID(followPID);
-            resetPID(wallPID);
-
-            previousControlTime =
-              millis() - controlInterval;
-
-          } else {
-
-            movement = ' ';
-            stop();
-            indicatorMovement = ' ';
-          }
-
-          break;
-
-        case '+':
-
-          speed = constrain(
-            speed + 15,
-            0,
-            255
-          );
-
-          if (movement != 'h' &&
-              movement != 'g') {
-
-            applyMovement();
-          }
-
-          break;
-
-        case '-':
-
-          speed = constrain(
-            speed - 15,
-            0,
-            255
-          );
-
-          if (movement != 'h' &&
-              movement != 'g') {
-
-            applyMovement();
-          }
-
-          break;
-
-        default:
-
-          movement = ' ';
-          stop();
-          indicatorMovement = ' ';
-
-          resetPID(followPID);
-          resetPID(wallPID);
-
-          break;
-      }
+      default:
+        break;
     }
   }
 
-  // Autonomous distance control
+  // Start automatically after power-up
+  // if enabled and no command was received.
+  updateAutoStart();
+
+  // Sensor-based navigation.
   updateAutonomousMode();
 
-  // LED indicators
-  updateLEDs();
-
-  // Encoder telemetry
+  // Telemetry.
   printTelemetry();
 }
