@@ -14,20 +14,20 @@ const int rightIrPin = A2;
 // ---------- Settings ----------
 const int LINE_SEEN = LOW;
 
-const int straightSpeed = 86;
-const int gentleInner = 60;
-const int gentleOuter = 60;
-const int strongInner = 76;
-const int strongOuter = 76;
+const int straightSpeed = 74;
+const int gentleInner = 5;
+const int gentleOuter = 80;
+const int strongInner = 5;
+const int strongOuter = 100;
 
 // Stage 1: both wheels backward.
-const int reverseSpeed = 60;
-const unsigned long reverseDurationMs = 600; // Set 600–1200.
+const int reverseSpeed = 150;
+const unsigned long reverseDurationMs = 900; // Set 600–1200.
 
 // Stage 2: rotate with wheels in opposite directions.
-const int rotateSpeed = 72;
+const int rotateSpeed = 110;
 const unsigned long rotateMinMs = 100;
-const unsigned long rotateMaxMs = 1400;
+const unsigned long rotateMaxMs = 1200;
 const unsigned long centeredConfirmMs = 60;
 
 // ---------- State ----------
@@ -223,13 +223,13 @@ void loop() {
     action = "STRAIGHT";
 
   } else if (L && !R) {
-    leftSpeed = -(C ? gentleInner : strongInner);
+    leftSpeed = C ? gentleInner : strongInner;
     rightSpeed = C ? gentleOuter : strongOuter;
     action = C ? "GENTLE LEFT" : "STRONG LEFT";
 
   } else if (R && !L) {
     leftSpeed = C ? gentleOuter : strongOuter;
-    rightSpeed = -(C ? gentleInner : strongInner);
+    rightSpeed = C ? gentleInner : strongInner;
     action = C ? "GENTLE RIGHT" : "STRONG RIGHT";
 
   } else if (!L && !C && !R) {
